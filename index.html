@@ -525,6 +525,13 @@ body { background: var(--bg); color: var(--text); font-family: var(--sans); min-
   .mcard { background:var(--s1); border:1px solid var(--border); border-radius:10px; overflow:hidden; display:flex; flex-direction:column; transition:border-color 0.15s; }
   .mcard:hover { border-color:var(--border2); }
   .mcard-top { display:flex; align-items:center; gap:0; }
+  .pin-btn { background:none; border:none; cursor:pointer; font-size:14px; padding:2px 4px; opacity:0.4; transition:opacity 0.15s; }
+  .pin-btn.pinned { opacity:1; }
+  .mcard.pinned-card { border-color: rgba(255,214,10,0.3); }
+  .mcard.pinned-card .mcard-stripe { background: var(--yellow) !important; }
+  .mcard[draggable="true"] { cursor:grab; }
+  .mcard.dragging { opacity:0.4; }
+  .pin-section-lbl { font-family:var(--mono); font-size:9px; color:var(--yellow); letter-spacing:1px; text-transform:uppercase; margin-bottom:6px; display:flex; align-items:center; gap:5px; }
   .mcard-stripe { width:3px; align-self:stretch; flex-shrink:0; }
   .mcard[data-s="intéressé"] .mcard-stripe { background:var(--accent); }
   .mcard[data-s="rep plus"] .mcard-stripe { background:var(--orange); }
@@ -893,6 +900,42 @@ function upNotes(id,val) { const p=P.find(p=>p.id===id); if(!p) return; p.notes=
 function toggleQualif(id,key) { const p=P.find(p=>p.id===id); if(!p) return; p.qualif[key]=!p.qualif[key]; saveP(); render(); renderTable(); }
 function cyclePP(id) { const p=P.find(p=>p.id===id); if(!p) return; const c={'?':'oui','oui':'non','non':'?'}; p.paypal=c[p.paypal]||'?'; saveP(); render(); renderTable(); }
 function markR(id) { const p=P.find(p=>p.id===id); if(!p) return; p.relances=Math.min((p.relances||0)+1,7); saveP(); render(); renderRelances(); }
+
+function togglePin(id) {
+  const p=P.find(p=>p.id===id); if(!p) return;
+  p.pinned = !p.pinned;
+  saveP(); render();
+}
+
+let pDragId = null;
+
+function pDragStart(e, id) {
+  // don't drag pinned
+  const p = P.find(p=>p.id===id);
+  if (p && p.pinned) { e.preventDefault(); return; }
+  pDragId = id;
+  e.dataTransfer.effectAllowed = 'move';
+  setTimeout(() => { const el=document.getElementById('mc-'+id); if(el) el.classList.add('dragging'); }, 0);
+}
+
+function pDragOver(e, id) {
+  e.preventDefault();
+  if (!pDragId || pDragId === id) return;
+  const from = P.findIndex(p=>p.id===pDragId);
+  const to = P.findIndex(p=>p.id===id);
+  if (from < 0 || to < 0) return;
+  // don't allow dropping before pinned section
+  const targetP = P[to];
+  if (targetP && targetP.pinned) return;
+  const moved = P.splice(from,1)[0];
+  P.splice(to,0,moved);
+  saveP(); render();
+}
+
+function pDragEnd(id) {
+  pDragId = null;
+  const el=document.getElementById('mc-'+id); if(el) el.classList.remove('dragging');
+}
 function delP(id) { if(!confirm('Supprimer ?')) return; P=P.filter(p=>p.id!==id); saveP(); render(); renderTable(); }
 function setFilter(f,btn) { currentFilter=f; document.querySelectorAll('.fbtn').forEach(b=>b.classList.remove('active')); btn.classList.add('active'); render(); }
 function toggleDetail(id) { const el=document.getElementById('detail-'+id); if(el) el.classList.toggle('open'); }
@@ -903,17 +946,32 @@ function render() {
   document.getElementById('s-interesse').textContent=P.filter(p=>p.status==='intéressé'||p.status==='rep plus').length;
   document.getElementById('s-vendu').textContent=P.filter(p=>p.status==='vendu').length;
   document.getElementById('s-relancer').textContent=toR.length;
-  let list=currentFilter==='tous'?P:P.filter(p=>p.status===currentFilter);
+
+  let list = currentFilter==='tous' ? P : P.filter(p=>p.status===currentFilter);
+
   const el=document.getElementById('mini-list');
   if(!list.length){el.innerHTML=`<div class="empty">Aucun prospect ici</div>`;return;}
-  el.innerHTML=list.map(p=>{
+
+  // Split pinned vs normal — pinned always on top, in their own order
+  const pinned = list.filter(p=>p.pinned);
+  const normal = list.filter(p=>!p.pinned);
+
+  const makeCard = (p, idx, isPinned) => {
     const d=days(p.date),r=p.relances||0,q=p.qualif||{},rel=shouldRelance(p);
     const msg=(M[r]&&M[r].trim())?M[r]:CONSEILS[r]?.msg||'';
     const esc=msg.replace(/`/g,'\\`').replace(/\n/g,'\\n');
     const qd=['motivation','maturité','finances'].map(k=>`<div class="qdot ${q[k]?'on':''}"></div>`).join('');
-    return `<div class="mcard" data-s="${p.status}">
+    return `
+    <div class="mcard ${isPinned?'pinned-card':''}"
+      id="mc-${p.id}"
+      data-s="${p.status}"
+      draggable="${isPinned?'false':'true'}"
+      ondragstart="pDragStart(event,${p.id})"
+      ondragover="pDragOver(event,${p.id})"
+      ondragend="pDragEnd(${p.id})">
       <div class="mcard-top">
         <div class="mcard-stripe"></div>
+        <div style="padding:6px 4px 0 8px;color:var(--muted);font-family:var(--mono);font-size:10px;align-self:flex-start">${idx+1}</div>
         <div class="mcard-body"><div>
           <div class="mcard-pseudo">${p.pseudo}${rel?` <span style="color:var(--pink)">🔥</span>`:''}</div>
           <div style="font-size:10px;color:var(--muted);margin-top:2px;display:flex;gap:6px;align-items:center">
@@ -923,6 +981,7 @@ function render() {
           </div>
         </div></div>
         <div class="mcard-right">
+          <button class="pin-btn ${isPinned?'pinned':''}" onclick="togglePin(${p.id})" title="${isPinned?'Désépingler':'Épingler'}">📌</button>
           <select class="select-sm" onchange="upField(${p.id},'status',this.value)">
             ${Object.entries(SL).map(([v,l])=>`<option value="${v}" ${p.status===v?'selected':''}>${l}</option>`).join('')}
           </select>
@@ -971,17 +1030,33 @@ function render() {
         </div>`:''}
       </div>
     </div>`;
-  }).join('');
+  };
+
+  let html = '';
+
+  if (pinned.length) {
+    html += `<div class="pin-section-lbl">📌 Épinglés</div>`;
+    html += pinned.map((p,i) => makeCard(p, i, true)).join('');
+    if (normal.length) html += `<div class="pin-section-lbl" style="color:var(--muted);margin-top:10px">— Autres</div>`;
+  }
+
+  html += normal.map((p,i) => makeCard(p, pinned.length + i, false)).join('');
+
+  el.innerHTML = html;
 }
 
 function renderTable() {
   const tb=document.getElementById('table-body');
   if(!P.length){tb.innerHTML=`<tr><td colspan="12" style="text-align:center;color:var(--muted);padding:20px">Aucun prospect</td></tr>`;return;}
-  tb.innerHTML=P.map((p,i)=>{
+  // Pinned first, then normal — same order as render()
+  const pinned = P.filter(p=>p.pinned);
+  const normal = P.filter(p=>!p.pinned);
+  const ordered = [...pinned, ...normal];
+  tb.innerHTML=ordered.map((p,i)=>{
     const d=days(p.date),r=p.relances||0,q=p.qualif||{},pct=Math.round(r/7*100);
     const mkQDot=key=>`<span class="t-qdot ${q[key]?'on':'off'}" title="${key}" onclick="toggleQualif(${p.id},'${key}');renderTable()"></span>`;
     return `<tr>
-      <td style="color:var(--muted);font-family:var(--mono);font-size:11px">${i+1}</td>
+      <td style="color:var(--muted);font-family:var(--mono);font-size:11px">${p.pinned?'📌':i+1}</td>
       <td style="font-family:var(--mono);font-weight:700;font-size:12px">${p.pseudo}</td>
       <td><select class="tsel" onchange="upField(${p.id},'status',this.value);renderTable();render()">
         ${Object.entries(SL).map(([v,l])=>`<option value="${v}" ${p.status===v?'selected':''}>${l}</option>`).join('')}
